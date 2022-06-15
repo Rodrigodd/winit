@@ -34,14 +34,15 @@ lazy_static! {
     static ref INTERNAL_EVENT: RwLock<Option<InternalEvent>> = RwLock::new(None);
 }
 
+#[derive(Clone, Copy)]
 enum InternalEvent {
     RedrawRequested,
+    UserEvent,
 }
 
 enum EventSource {
     Callback,
     InputQueue,
-    User,
     Internal(InternalEvent),
 }
 
@@ -217,13 +218,13 @@ fn poll(poll: Poll) -> Option<EventSource> {
             _ => unreachable!(),
         },
         Poll::Timeout => None,
-        Poll::Wake => Some(
+        Poll::Wake => Some(EventSource::Internal(
             INTERNAL_EVENT
                 .write()
                 .unwrap()
                 .take()
-                .map_or(EventSource::User, EventSource::Internal),
-        ),
+                .unwrap_or(InternalEvent::UserEvent),
+        )),
         Poll::Callback => unreachable!(),
     }
 }
@@ -465,19 +466,19 @@ impl<T: 'static> EventLoop<T> {
                         }
                     }
                 }
-                Some(EventSource::User) => {
-                    let mut user_queue = self.user_queue.lock().unwrap();
-                    while let Some(event) = user_queue.pop_front() {
-                        call_event_handler!(
-                            event_handler,
-                            self.window_target(),
-                            control_flow,
-                            event::Event::UserEvent(event)
-                        );
-                    }
-                }
                 Some(EventSource::Internal(internal)) => match internal {
                     InternalEvent::RedrawRequested => redraw = true,
+                    InternalEvent::UserEvent => {
+                        let mut user_queue = self.user_queue.lock().unwrap();
+                        while let Some(event) = user_queue.pop_front() {
+                            call_event_handler!(
+                                event_handler,
+                                self.window_target(),
+                                control_flow,
+                                event::Event::UserEvent(event)
+                            );
+                        }
+                    }
                 },
                 None => {}
             }
@@ -581,6 +582,7 @@ pub struct EventLoopProxy<T: 'static> {
 
 impl<T> EventLoopProxy<T> {
     pub fn send_event(&self, event: T) -> Result<(), event_loop::EventLoopClosed<T>> {
+        *INTERNAL_EVENT.write().unwrap() = Some(InternalEvent::UserEvent);
         self.queue.lock().unwrap().push_back(event);
         self.looper.wake();
         Ok(())
@@ -674,7 +676,11 @@ impl Window {
     }
 
     pub fn request_redraw(&self) {
-        *INTERNAL_EVENT.write().unwrap() = Some(InternalEvent::RedrawRequested);
+        // insert RedrawRequest if None
+        let _ = *INTERNAL_EVENT
+            .write()
+            .unwrap()
+            .get_or_insert(InternalEvent::RedrawRequested);
         ForeignLooper::for_thread().unwrap().wake();
     }
 
