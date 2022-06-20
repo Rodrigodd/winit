@@ -469,8 +469,12 @@ impl<T: 'static> EventLoop<T> {
                 Some(EventSource::Internal(internal)) => match internal {
                     InternalEvent::RedrawRequested => redraw = true,
                     InternalEvent::UserEvent => {
-                        let mut user_queue = self.user_queue.lock().unwrap();
-                        while let Some(event) = user_queue.pop_front() {
+                        // Dont hold the lock while calling the event handler to avoid dead
+                        // locks.
+                        while let Some(event) = {
+                            let mut user_queue = self.user_queue.lock().unwrap();
+                            user_queue.pop_front()
+                        } {
                             call_event_handler!(
                                 event_handler,
                                 self.window_target(),
