@@ -437,28 +437,36 @@ impl<T: 'static> EventLoop<T> {
                                             KeyAction::Up => event::ElementState::Released,
                                             _ => event::ElementState::Released,
                                         };
-                                        #[allow(deprecated)]
-                                        let event = event::Event::WindowEvent {
-                                            window_id,
-                                            event: event::WindowEvent::KeyboardInput {
-                                                device_id,
-                                                input: event::KeyboardInput {
-                                                    scancode: key.scan_code() as u32,
-                                                    state,
-                                                    virtual_keycode: ndk_keycode_to_virtualkeycode(
-                                                        key.key_code(),
-                                                    ),
-                                                    modifiers: event::ModifiersState::default(),
-                                                },
-                                                is_synthetic: false,
-                                            },
-                                        };
-                                        call_event_handler!(
-                                            event_handler,
-                                            self.window_target(),
-                                            control_flow,
-                                            event
-                                        );
+
+                                        match key.key_code() {
+                                            Keycode::VolumeUp | Keycode::VolumeDown => {
+                                                handled = false
+                                            }
+                                            _ => {
+                                                #[allow(deprecated)]
+                                                let event = event::Event::WindowEvent {
+                                                    window_id,
+                                                    event: event::WindowEvent::KeyboardInput {
+                                                        device_id,
+                                                        input: event::KeyboardInput {
+                                                            scancode: key.scan_code() as u32,
+                                                            state,
+                                                            virtual_keycode: ndk_keycode_to_virtualkeycode(
+                                                                key.key_code(),
+                                                                ),
+                                                                modifiers: event::ModifiersState::default(),
+                                                        },
+                                                        is_synthetic: false,
+                                                    },
+                                                };
+                                                call_event_handler!(
+                                                    event_handler,
+                                                    self.window_target(),
+                                                    control_flow,
+                                                    event
+                                                );
+                                            }
+                                        }
                                     }
                                 };
                                 input_queue.finish_event(event, handled);
