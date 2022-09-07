@@ -1,10 +1,7 @@
 use std::{
     collections::{BTreeSet, VecDeque},
-    ffi::OsString,
     hash::Hash,
-    io, mem,
-    os::windows::prelude::OsStringExt,
-    ptr,
+    io, mem, ptr,
 };
 
 use windows_sys::Win32::{
@@ -12,11 +9,12 @@ use windows_sys::Win32::{
     Graphics::Gdi::{
         EnumDisplayMonitors, EnumDisplaySettingsExW, GetMonitorInfoW, MonitorFromPoint,
         MonitorFromWindow, DEVMODEW, DM_BITSPERPEL, DM_DISPLAYFREQUENCY, DM_PELSHEIGHT,
-        DM_PELSWIDTH, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
-        MONITOR_DEFAULTTOPRIMARY,
+        DM_PELSWIDTH, ENUM_CURRENT_SETTINGS, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
+        MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
     },
 };
 
+use super::util::decode_wide;
 use crate::{
     dpi::{PhysicalPosition, PhysicalSize},
     monitor::{MonitorHandle as RootMonitorHandle, VideoMode as RootVideoMode},
@@ -31,7 +29,7 @@ use crate::{
 pub struct VideoMode {
     pub(crate) size: (u32, u32),
     pub(crate) bit_depth: u16,
-    pub(crate) refresh_rate: u16,
+    pub(crate) refresh_rate_millihertz: u32,
     pub(crate) monitor: MonitorHandle,
     // DEVMODEW is huge so we box it to avoid blowing up the size of winit::window::Fullscreen
     pub(crate) native_video_mode: Box<DEVMODEW>,
@@ -41,7 +39,7 @@ impl PartialEq for VideoMode {
     fn eq(&self, other: &Self) -> bool {
         self.size == other.size
             && self.bit_depth == other.bit_depth
-            && self.refresh_rate == other.refresh_rate
+            && self.refresh_rate_millihertz == other.refresh_rate_millihertz
             && self.monitor == other.monitor
     }
 }
@@ -52,7 +50,7 @@ impl std::hash::Hash for VideoMode {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.size.hash(state);
         self.bit_depth.hash(state);
-        self.refresh_rate.hash(state);
+        self.refresh_rate_millihertz.hash(state);
         self.monitor.hash(state);
     }
 }
@@ -62,7 +60,7 @@ impl std::fmt::Debug for VideoMode {
         f.debug_struct("VideoMode")
             .field("size", &self.size)
             .field("bit_depth", &self.bit_depth)
-            .field("refresh_rate", &self.refresh_rate)
+            .field("refresh_rate_millihertz", &self.refresh_rate_millihertz)
             .field("monitor", &self.monitor)
             .finish()
     }
@@ -77,8 +75,8 @@ impl VideoMode {
         self.bit_depth
     }
 
-    pub fn refresh_rate(&self) -> u16 {
-        self.refresh_rate
+    pub fn refresh_rate_millihertz(&self) -> u32 {
+        self.refresh_rate_millihertz
     }
 
     pub fn monitor(&self) -> RootMonitorHandle {
@@ -169,7 +167,7 @@ impl MonitorHandle {
     pub fn name(&self) -> Option<String> {
         let monitor_info = get_monitor_info(self.0).unwrap();
         Some(
-            OsString::from_wide(&monitor_info.szDevice)
+            decode_wide(&monitor_info.szDevice)
                 .to_string_lossy()
                 .to_string(),
         )
@@ -191,6 +189,23 @@ impl MonitorHandle {
         PhysicalSize {
             width: (rc_monitor.right - rc_monitor.left) as u32,
             height: (rc_monitor.bottom - rc_monitor.top) as u32,
+        }
+    }
+
+    #[inline]
+    pub fn refresh_rate_millihertz(&self) -> Option<u32> {
+        let monitor_info = get_monitor_info(self.0).unwrap();
+        let device_name = monitor_info.szDevice.as_ptr();
+        unsafe {
+            let mut mode: DEVMODEW = mem::zeroed();
+            mode.dmSize = mem::size_of_val(&mode) as u16;
+            if EnumDisplaySettingsExW(device_name, ENUM_CURRENT_SETTINGS, &mut mode, 0)
+                == false.into()
+            {
+                None
+            } else {
+                Some(mode.dmDisplayFrequency * 1000)
+            }
         }
     }
 
@@ -235,7 +250,7 @@ impl MonitorHandle {
                     video_mode: VideoMode {
                         size: (mode.dmPelsWidth, mode.dmPelsHeight),
                         bit_depth: mode.dmBitsPerPel as u16,
-                        refresh_rate: mode.dmDisplayFrequency as u16,
+                        refresh_rate_millihertz: mode.dmDisplayFrequency as u32 * 1000,
                         monitor: self.clone(),
                         native_video_mode: Box::new(mode),
                     },
